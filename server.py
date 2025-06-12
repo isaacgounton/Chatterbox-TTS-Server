@@ -239,17 +239,37 @@ async def health_check():
 async def get_voices():
     """Get available voices for compatibility with TTS gateway."""
     try:
-        predefined_voices = utils.get_predefined_voices()
-        # Ensure we return the correct format: [{"name": "filename", "display_name": "display"}]
-        voices = []
-        for voice in predefined_voices:
-            voice_name = voice.get("filename", voice.get("display_name", ""))
-            display_name = voice.get("display_name", voice_name)
-            if voice_name:  # Only add voices with valid names
-                voices.append({
-                    "name": voice_name,
-                    "display_name": display_name
-                })
+        # Return a subset of Kokoro voices that match our intended style
+        voices = [
+            {"name": "Abigail.wav", "display_name": "Abigail"},
+            {"name": "Adrian.wav", "display_name": "Adrian"},
+            {"name": "Alexander.wav", "display_name": "Alexander"},
+            {"name": "Alice.wav", "display_name": "Alice"},
+            {"name": "Austin.wav", "display_name": "Austin"},
+            {"name": "Axel.wav", "display_name": "Axel"},
+            {"name": "Connor.wav", "display_name": "Connor"},
+            {"name": "Cora.wav", "display_name": "Cora"},
+            {"name": "Elena.wav", "display_name": "Elena"},
+            {"name": "Eli.wav", "display_name": "Eli"},
+            {"name": "Emily.wav", "display_name": "Emily"},
+            {"name": "Everett.wav", "display_name": "Everett"},
+            {"name": "Gabriel.wav", "display_name": "Gabriel"},
+            {"name": "Gianna.wav", "display_name": "Gianna"},
+            {"name": "Henry.wav", "display_name": "Henry"},
+            {"name": "Ian.wav", "display_name": "Ian"},
+            {"name": "Jade.wav", "display_name": "Jade"},
+            {"name": "Jeremiah.wav", "display_name": "Jeremiah"},
+            {"name": "Jordan.wav", "display_name": "Jordan"},
+            {"name": "Julian.wav", "display_name": "Julian"},
+            {"name": "Layla.wav", "display_name": "Layla"},
+            {"name": "Leonardo.wav", "display_name": "Leonardo"},
+            {"name": "Michael.wav", "display_name": "Michael"},
+            {"name": "Miles.wav", "display_name": "Miles"},
+            {"name": "Olivia.wav", "display_name": "Olivia"},
+            {"name": "Ryan.wav", "display_name": "Ryan"},
+            {"name": "Taylor.wav", "display_name": "Taylor"},
+            {"name": "Thomas.wav", "display_name": "Thomas"}
+        ]
         logger.info(f"Returning {len(voices)} voices")
         return voices
     except Exception as e:
