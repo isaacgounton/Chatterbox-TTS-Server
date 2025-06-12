@@ -624,9 +624,31 @@ async def gateway_tts_endpoint(request: dict):
         if not text:
             raise HTTPException(status_code=400, detail="Text is required")
         
+        # Get available voices to check if voice exists
+        predefined_voices = utils.get_predefined_voices()
+        
         # Determine voice mode and file
-        voice_mode = "predefined" if voice else "none"
-        predefined_voice_id = voice
+        if voice and predefined_voices:
+            # Check if the requested voice exists
+            voice_exists = any(v.get("filename") == voice or v.get("display_name") == voice
+                             for v in predefined_voices)
+            if voice_exists:
+                voice_mode = "predefined"
+                predefined_voice_id = voice
+            else:
+                # Voice specified but doesn't exist, use first available voice
+                voice_mode = "predefined"
+                predefined_voice_id = predefined_voices[0].get("filename", predefined_voices[0].get("display_name"))
+        elif predefined_voices:
+            # No voice specified but voices available, use first one
+            voice_mode = "predefined"
+            predefined_voice_id = predefined_voices[0].get("filename", predefined_voices[0].get("display_name"))
+        else:
+            # No predefined voices available but they should be mounted via Docker volume
+            # Use a fallback - try "Abigail.wav" which we know exists locally
+            voice_mode = "predefined"
+            predefined_voice_id = "Abigail.wav"
+            logger.warning("No voices detected but using fallback voice. Check volume mounting.")
         
         # Convert to CustomTTSRequest format
         custom_request = CustomTTSRequest(
