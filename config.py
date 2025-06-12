@@ -35,7 +35,7 @@ def get_reference_audio_path(ensure_absolute: bool = False):
     return path.absolute() if ensure_absolute else path
 
 def get_predefined_voices_path(ensure_absolute: bool = False):
-    path = Path('chatterbox-predefined-voices.json')
+    path = Path('voices')
     return path.absolute() if ensure_absolute else path
 
 def get_ui_title():
@@ -130,6 +130,10 @@ class ConfigManager:
         """Get a string value from config"""
         value = self._get_nested_value(path, default)
         return str(value) if value is not None else default
+
+    def get_string(self, path, default=""):
+        """Alias for get_str for compatibility"""
+        return self.get_str(path, default)
     
     def get_bool(self, path, default=False):
         """Get a boolean value from config"""
