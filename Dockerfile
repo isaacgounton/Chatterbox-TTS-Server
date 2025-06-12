@@ -35,7 +35,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY . .
 
 # Create required directories for the application
-RUN mkdir -p model_cache reference_audio outputs voices logs hf_cache ui static
+RUN mkdir -p model_cache reference_audio outputs logs hf_cache ui static
+
+# Copy voice files into the container (ensure they're available regardless of volume mounting)
+COPY voices/ ./voices/
 
 # Pre-download the model to avoid startup delays (optional)
 # Uncomment the following lines if you want to pre-download the model during build
