@@ -20,17 +20,21 @@ def get_host():
 def get_port():
     return int(os.getenv('PORT', 9001))
 
-def get_log_file_path():
-    return Path('logs/server.log')
+def get_log_file_path(ensure_absolute: bool = False):
+    path = Path('logs/server.log')
+    return path.absolute() if ensure_absolute else path
 
-def get_output_path():
-    return Path('outputs')
+def get_output_path(ensure_absolute: bool = False):
+    path = Path('outputs')
+    return path.absolute() if ensure_absolute else path
 
-def get_reference_audio_path():
-    return Path('reference_audio')
+def get_reference_audio_path(ensure_absolute: bool = False):
+    path = Path('reference_audio')
+    return path.absolute() if ensure_absolute else path
 
-def get_predefined_voices_path():
-    return Path('chatterbox-predefined-voices.json')
+def get_predefined_voices_path(ensure_absolute: bool = False):
+    path = Path('chatterbox-predefined-voices.json')
+    return path.absolute() if ensure_absolute else path
 
 def get_ui_title():
     return config.get('ui', {}).get('title', 'Chatterbox TTS')
@@ -91,7 +95,11 @@ class ConfigManager:
     def get_int(self, path, default=0):
         """Get an integer value from config"""
         value = self._get_nested_value(path, default)
+        if value is None:
+            return default
         try:
+            if isinstance(value, bool):  # Handle bool separately as it's a subclass of int
+                return 1 if value else 0
             return int(value)
         except (TypeError, ValueError):
             return default
@@ -99,7 +107,11 @@ class ConfigManager:
     def get_float(self, path, default=0.0):
         """Get a float value from config"""
         value = self._get_nested_value(path, default)
+        if value is None:
+            return default
         try:
+            if isinstance(value, bool):  # Handle bool separately
+                return 1.0 if value else 0.0
             return float(value)
         except (TypeError, ValueError):
             return default
