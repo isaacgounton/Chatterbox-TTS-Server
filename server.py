@@ -236,8 +236,18 @@ async def get_voices():
     """Get available voices for compatibility with TTS gateway."""
     try:
         predefined_voices = utils.get_predefined_voices()
-        return [{"name": voice.get("filename", voice.get("display_name", "")), 
-                "display_name": voice.get("display_name", "")} for voice in predefined_voices]
+        # Ensure we return the correct format: [{"name": "filename", "display_name": "display"}]
+        voices = []
+        for voice in predefined_voices:
+            voice_name = voice.get("filename", voice.get("display_name", ""))
+            display_name = voice.get("display_name", voice_name)
+            if voice_name:  # Only add voices with valid names
+                voices.append({
+                    "name": voice_name,
+                    "display_name": display_name
+                })
+        logger.info(f"Returning {len(voices)} voices")
+        return voices
     except Exception as e:
         logger.error(f"Error getting voices: {e}")
         return []
@@ -593,8 +603,57 @@ async def upload_predefined_voice_endpoint(files: List[UploadFile] = File(...)):
 # --- TTS Generation Endpoint ---
 
 
+# Gateway-compatible TTS endpoint
+@app.post("/tts", tags=["TTS Generation"])
+async def gateway_tts_endpoint(request: dict):
+    """Gateway-compatible TTS endpoint that accepts simple requests."""
+    if not engine.MODEL_LOADED:
+        raise HTTPException(
+            status_code=503,
+            detail="TTS engine model is not currently loaded or available.",
+        )
+    
+    try:
+        # Extract parameters from gateway request
+        text = request.get("text", "")
+        voice = request.get("voice")
+        speed = request.get("speed", 1.0)
+        pitch = request.get("pitch", 1.0)
+        output_format = request.get("format", "wav")
+        
+        if not text:
+            raise HTTPException(status_code=400, detail="Text is required")
+        
+        # Determine voice mode and file
+        voice_mode = "predefined" if voice else "none"
+        predefined_voice_id = voice
+        
+        # Convert to CustomTTSRequest format
+        custom_request = CustomTTSRequest(
+            text=text,
+            voice_mode=voice_mode,
+            predefined_voice_id=predefined_voice_id,
+            speed_factor=speed,
+            output_format=output_format,
+            temperature=get_gen_default_temperature(),
+            exaggeration=get_gen_default_exaggeration(),
+            cfg_weight=get_gen_default_cfg_weight(),
+            seed=get_gen_default_seed(),
+            split_text=True,
+            chunk_size=120
+        )
+        
+        # Use the existing TTS generation logic
+        return await custom_tts_endpoint(custom_request, None)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Gateway TTS request failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post(
-    "/tts",
+    "/tts-custom",
     tags=["TTS Generation"],
     summary="Generate speech with custom parameters",
     responses={
@@ -621,7 +680,7 @@ async def upload_predefined_voice_endpoint(files: List[UploadFile] = File(...)):
     },
 )
 async def custom_tts_endpoint(
-    request: CustomTTSRequest, background_tasks: BackgroundTasks
+    request: CustomTTSRequest, background_tasks: BackgroundTasks = None
 ):
     """
     Generates speech audio from text using specified parameters.
