@@ -704,6 +704,14 @@ def get_host() -> str:
 
 def get_port() -> int:
     """Returns the server port number."""
+    # Check environment variable first, then fall back to config
+    env_port = os.getenv("PORT")
+    if env_port:
+        try:
+            return int(env_port)
+        except ValueError:
+            logger.warning(f"Invalid PORT environment variable '{env_port}', using config")
+    
     return config_manager.get_int(
         "server.port", _get_default_from_structure("server.port")
     )
