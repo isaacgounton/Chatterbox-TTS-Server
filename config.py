@@ -77,5 +77,49 @@ class ConfigManager:
     
     def reload(self):
         self.config = load_config()
+    
+    def _get_nested_value(self, path, default=None):
+        """Get a nested value from config using dot notation"""
+        current = self.config
+        for part in path.split('.'):
+            if isinstance(current, dict):
+                current = current.get(part, default)
+            else:
+                return default
+        return current
+
+    def get_int(self, path, default=0):
+        """Get an integer value from config"""
+        value = self._get_nested_value(path, default)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+    
+    def get_float(self, path, default=0.0):
+        """Get a float value from config"""
+        value = self._get_nested_value(path, default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+    
+    def get_str(self, path, default=""):
+        """Get a string value from config"""
+        value = self._get_nested_value(path, default)
+        return str(value) if value is not None else default
+    
+    def get_bool(self, path, default=False):
+        """Get a boolean value from config"""
+        value = self._get_nested_value(path, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() in ('true', '1', 'yes', 'on')
+        return bool(value)
+    
+    def get(self, path, default=None):
+        """Get a value from config with no type conversion"""
+        return self._get_nested_value(path, default)
 
 config_manager = ConfigManager()
