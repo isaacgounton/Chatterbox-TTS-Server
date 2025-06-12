@@ -1,65 +1,27 @@
 # ============================================================================
-# CHATTERBOX TTS SERVER - REQUIREMENTS (CPU-ONLY INSTALLATION)
+# CHATTERBOX TTS SERVER - REQUIREMENTS (SIMPLIFIED)
 # ============================================================================
-# This file ensures compatible PyTorch, ML, and audio processing libraries
-# are installed for CPU-only operation. All packages are pinned for stability.
+# Let chatterbox-tts handle its own dependencies to avoid conflicts
 
 # --- PyTorch CPU-Only Installation Index ---
-# Use PyTorch's official CPU-only package index for torch components
 --extra-index-url https://download.pytorch.org/whl/cpu
 
-# --- Deep Learning Framework (CPU-Only) ---
-# Updated to match chatterbox-tts requirement for torch==2.6.0
-torch==2.6.0                    # PyTorch deep learning framework (CPU)
-torchvision==0.21.0             # Computer vision utilities for PyTorch
-torchaudio==2.6.0               # Audio processing utilities for PyTorch
-
-# --- Core TTS Application ---
-# Chatterbox TTS engine - installed directly from GitHub
+# --- Core TTS Application (handles its own dependencies) ---
 git+https://github.com/resemble-ai/chatterbox.git
 
-# --- Web Framework & Server ---
-fastapi                         # Modern async web framework
-uvicorn[standard]               # ASGI server with performance extras
+# --- Web Framework & Server (only if not provided by chatterbox) ---
+fastapi
+uvicorn[standard]
 
-# --- Scientific Computing & ML Libraries ---
-numpy==1.26.4                   # Fundamental numerical computing
-librosa                         # Advanced audio/music analysis
-safetensors                     # Safe tensor serialization format
-descript-audio-codec            # Audio codec for ML applications
-
-# --- Audio I/O & Processing ---
-soundfile                       # Audio file I/O (requires libsndfile system library)
-pydub                          # Simple audio manipulation
-audiotsm                       # Audio time-scale modification
-praat-parselmouth              # Python interface to Praat speech analysis
-                               # NOTE: Use 'praat-parselmouth' not 'parselmouth' 
-                               # to avoid setuptools use_2to3 compatibility issues
-
-# --- Web & API Utilities ---
-python-multipart               # Form data parsing for FastAPI
-requests                       # HTTP client library
-Jinja2                        # Template engine
-aiofiles                      # Async file operations
-hf_transfer                     # Speed up file transfers with the Hugging Face Hub.
-
-
-# --- Configuration & Data Processing ---
-PyYAML                        # YAML configuration file support
-watchdog                      # File system event monitoring
-unidecode                     # Unicode text transliteration
-inflect                       # Natural language inflection
-tqdm                          # Progress bars for loops
-
-# ============================================================================
-# INSTALLATION NOTES:
-# 
-# 1. Ensure your virtual environment is activated before installation
-# 2. Run: pip install --upgrade pip
-# 3. Run: pip install -r requirements.txt
-# 4. For parselmouth issues, the package name is 'praat-parselmouth' on PyPI
-#    but you import it as 'import parselmouth' in Python code
-# 5. System dependencies may be required:
-#    - libsndfile (for soundfile package)
-#    - FFmpeg (for some audio processing features)
-# ============================================================================
+# --- Additional utilities not included in chatterbox ---
+python-multipart
+aiofiles
+PyYAML
+watchdog
+pydub
+soundfile
+tqdm
+inflect
+unidecode
+Jinja2
+requests

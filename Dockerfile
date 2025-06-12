@@ -1,29 +1,25 @@
-FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04
-
-ARG RUNTIME=nvidia
+# Chatterbox TTS Server - Optimized for Awesome-TTS Integration
+FROM python:3.11-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV DEBIAN_FRONTEND=noninteractive
-# Set the Hugging Face home directory for better model caching
 ENV HF_HOME=/app/hf_cache
+ENV TRANSFORMERS_CACHE=/app/hf_cache
+ENV HF_HUB_CACHE=/app/hf_cache
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    cmake \
     libsndfile1 \
     ffmpeg \
-    python3 \
-    python3-pip \
-    python3-dev \
-    python3-venv \
     git \
+    curl \
+    pkg-config \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-
-# Create a symlink for python3 to be python for convenience
-RUN ln -s /usr/bin/python3 /usr/bin/python
 
 # Set up working directory
 WORKDIR /app
@@ -31,23 +27,49 @@ WORKDIR /app
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
 
-# Upgrade pip and install Python dependencies
-RUN pip3 install --no-cache-dir --upgrade pip && \
-    pip3 install --no-cache-dir -r requirements.txt
-# Conditionally install NVIDIA dependencies if RUNTIME is set to 'nvidia'
-COPY requirements-nvidia.txt .
+# Upgrade pip and install Python dependencies (CPU-only)
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-RUN if [ "$RUNTIME" = "nvidia" ]; then \
-    pip3 install --no-cache-dir -r requirements-nvidia.txt; \
-    fi
 # Copy the rest of the application code
 COPY . .
 
-# Create required directories for the application (fixed syntax error)
-RUN mkdir -p model_cache reference_audio outputs voices logs hf_cache
+# Create required directories for the application
+RUN mkdir -p model_cache reference_audio outputs voices logs hf_cache ui static
+
+# Pre-download the model to avoid startup delays (optional)
+# Uncomment the following lines if you want to pre-download the model during build
+# RUN python -c "
+# import sys
+# import signal
+# import os
+# def timeout_handler(signum, frame):
+#     print('Model download timed out after 15 minutes')
+#     sys.exit(1)
+# signal.signal(signal.SIGALRM, timeout_handler)
+# signal.alarm(900)  # 15 minutes
+# try:
+#     from chatterbox.tts import ChatterboxTTS
+#     print('Pre-downloading Chatterbox model...')
+#     model = ChatterboxTTS.from_pretrained(device='cpu')
+#     print('Model pre-download completed successfully!')
+#     signal.alarm(0)
+# except Exception as e:
+#     print(f'Model pre-download failed: {e}')
+#     signal.alarm(0)
+#     sys.exit(0)  # Continue anyway
+# "
+
+# Set proper permissions
+RUN chmod -R 755 /app && \
+    chmod -R 777 hf_cache model_cache reference_audio outputs voices logs
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # Expose the port the application will run on
-EXPOSE 8004
+EXPOSE 8000
 
 # Command to run the application
-CMD ["python3", "server.py"]
+CMD ["python", "server.py"]

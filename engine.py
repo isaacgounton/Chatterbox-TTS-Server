@@ -124,10 +124,58 @@ def load_model() -> bool:
         logger.info(
             f"Attempting to load model directly using from_pretrained (expected from Hugging Face repository: {model_repo_id_config} or library default)."
         )
+        logger.info("This may take several minutes on first run as the model needs to be downloaded...")
+        logger.info("Model size is approximately 2-4GB. Please be patient during initial download.")
+        
         try:
             # Directly use from_pretrained. This will utilize the standard Hugging Face cache.
             # The ChatterboxTTS.from_pretrained method handles downloading if the model is not in the cache.
-            chatterbox_model = ChatterboxTTS.from_pretrained(device=model_device)
+            import time
+            import signal
+            import os
+            
+            def timeout_handler(signum, frame):
+                raise TimeoutError("Model download/loading timed out after 10 minutes")
+            
+            # Set a 10-minute timeout for model loading
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(600)  # 10 minutes
+            
+            start_time = time.time()
+            logger.info("Starting model download/loading...")
+            logger.info("Will timeout after 10 minutes if download fails...")
+            
+            try:
+                # Check available disk space
+                statvfs = os.statvfs('/app/hf_cache')
+                free_space_gb = (statvfs.f_frsize * statvfs.f_bavail) / (1024**3)
+                logger.info(f"Available disk space: {free_space_gb:.1f} GB")
+                
+                if free_space_gb < 5:
+                    logger.error(f"Insufficient disk space! Need at least 5GB, have {free_space_gb:.1f}GB")
+                    signal.alarm(0)  # Cancel timeout
+                    chatterbox_model = None
+                    MODEL_LOADED = False
+                    return False
+                
+                chatterbox_model = ChatterboxTTS.from_pretrained(device=model_device)
+                signal.alarm(0)  # Cancel timeout on success
+                
+                elapsed_time = time.time() - start_time
+                logger.info(f"Model loading completed in {elapsed_time:.1f} seconds")
+                
+            except TimeoutError as e:
+                signal.alarm(0)  # Cancel timeout
+                logger.error("Model download/loading timed out!")
+                logger.error("This could be due to:")
+                logger.error("1. Slow internet connection")
+                logger.error("2. Hugging Face servers being slow")
+                logger.error("3. Network connectivity issues")
+                logger.error("4. Insufficient bandwidth")
+                chatterbox_model = None
+                MODEL_LOADED = False
+                return False
+            
             # The actual repo ID used by from_pretrained is often internal to the library,
             # but logging the configured one provides user context.
             logger.info(
@@ -138,6 +186,11 @@ def load_model() -> bool:
                 f"Failed to load model using from_pretrained (expected from '{model_repo_id_config}' or library default): {e_hf}",
                 exc_info=True,
             )
+            logger.error("This could be due to:")
+            logger.error("1. Network connectivity issues")
+            logger.error("2. Insufficient disk space for model cache")
+            logger.error("3. Hugging Face Hub being temporarily unavailable")
+            logger.error("4. Model repository access restrictions")
             chatterbox_model = None
             MODEL_LOADED = False
             return False

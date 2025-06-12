@@ -222,6 +222,26 @@ templates = Jinja2Templates(directory=str(ui_static_path))
 
 
 # --- Main UI Route ---
+@app.get("/health", tags=["System"])
+async def health_check():
+    """Health check endpoint for service monitoring."""
+    return {
+        "status": "healthy" if engine.MODEL_LOADED else "unhealthy",
+        "service": "chatterbox-tts",
+        "model_loaded": engine.MODEL_LOADED
+    }
+
+@app.get("/voices", tags=["System"])
+async def get_voices():
+    """Get available voices for compatibility with TTS gateway."""
+    try:
+        predefined_voices = utils.get_predefined_voices()
+        return [{"name": voice.get("filename", voice.get("display_name", "")), 
+                "display_name": voice.get("display_name", "")} for voice in predefined_voices]
+    except Exception as e:
+        logger.error(f"Error getting voices: {e}")
+        return []
+
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def get_web_ui(request: Request):
     """Serves the main web interface (index.html)."""
