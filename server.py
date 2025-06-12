@@ -137,10 +137,10 @@ async def lifespan(app: FastAPI):
     try:
         logger.info(f"Configuration loaded. Log file at: {get_log_file_path()}")
 
+        # Create necessary directories
         paths_to_ensure = [
             get_output_path(),
             get_reference_audio_path(),
-            get_predefined_voices_path(),
             Path("ui"),
             config_manager.get_path(
                 "paths.model_cache", "./model_cache", ensure_absolute=True
@@ -148,6 +148,10 @@ async def lifespan(app: FastAPI):
         ]
         for p in paths_to_ensure:
             p.mkdir(parents=True, exist_ok=True)
+
+        # Ensure parent directory for predefined voices file exists
+        predefined_voices_path = get_predefined_voices_path()
+        predefined_voices_path.parent.mkdir(parents=True, exist_ok=True)
 
         if not engine.load_model():
             logger.critical(
