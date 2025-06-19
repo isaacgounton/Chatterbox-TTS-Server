@@ -81,6 +81,7 @@ load_dotenv()
 # Authentication configuration
 SECRET_KEY = os.getenv("SESSION_SECRET", "your-secret-key-change-this")
 AUTH_USERNAME = os.getenv("AUTH_USERNAME", "admin")
+AUTH_PASSWORD = os.getenv("AUTH_PASSWORD")  # Plain text password (optional)
 AUTH_PASSWORD_HASH = os.getenv("AUTH_PASSWORD_HASH", "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBQ72SJWJzX4gS")  # default: "password"
 
 # API Key configuration (for API endpoints)
@@ -114,6 +115,19 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
     except Exception:
         return False
+
+def authenticate_user(username: str, password: str) -> bool:
+    """Authenticate user with either plain text password or hash."""
+    # Check username first
+    if username != AUTH_USERNAME:
+        return False
+    
+    # If plain text password is set, use it directly
+    if AUTH_PASSWORD:
+        return password == AUTH_PASSWORD
+    
+    # Otherwise, use the password hash
+    return verify_password(password, AUTH_PASSWORD_HASH)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create a JWT access token."""
@@ -327,7 +341,7 @@ async def health_check():
 @app.post("/api/auth/login", response_model=LoginResponse)
 async def login(request: LoginRequest):
     """Authenticate user and return JWT token."""
-    if request.username == AUTH_USERNAME and verify_password(request.password, AUTH_PASSWORD_HASH):
+    if authenticate_user(request.username, request.password):
         access_token = create_access_token(data={"sub": request.username})
         return LoginResponse(success=True, token=access_token)
     else:
@@ -383,25 +397,6 @@ async def get_voices():
 async def get_web_ui(request: Request):
     """Serves the main web interface (index.html) with authentication check."""
     logger.info("Request received for main UI page ('/').")
-    
-    # Check for authentication
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        # Return login page HTML instead of the main interface
-        return HTMLResponse(content=get_login_html(), status_code=200)
-    
-    try:
-        # Verify the token
-        if auth_header.startswith("Bearer "):
-            token = auth_header.split(" ")[1]
-            payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-            username = payload.get("sub")
-            if not username:
-                return HTMLResponse(content=get_login_html(), status_code=200)
-        else:
-            return HTMLResponse(content=get_login_html(), status_code=200)
-    except jwt.PyJWTError:
-        return HTMLResponse(content=get_login_html(), status_code=200)
     
     try:
         return templates.TemplateResponse("index.html", {"request": request})
