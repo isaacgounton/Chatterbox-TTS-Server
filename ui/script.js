@@ -2,6 +2,26 @@
 // Client-side JavaScript for the TTS Server web interface.
 // Handles UI interactions, API communication, audio playback, and settings management.
 
+// Helper function to make authenticated requests
+function getAuthHeaders() {
+    const token = localStorage.getItem('authToken');
+    const headers = {};
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
+}
+
+// Helper function to handle authentication errors
+function handleAuthError(response) {
+    if (response.status === 401) {
+        localStorage.removeItem('authToken');
+        window.location.reload();
+        return true;
+    }
+    return false;
+}
+
 document.addEventListener('DOMContentLoaded', async function () {
     // --- Global Flags & State ---
     let isGenerating = false;
@@ -25,6 +45,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     const appTitleLink = document.getElementById('app-title-link');
     const themeToggleButton = document.getElementById('theme-toggle-btn');
     const themeSwitchThumb = themeToggleButton ? themeToggleButton.querySelector('.theme-switch-thumb') : null;
+    const logoutButton = document.getElementById('logout-btn');
     const notificationArea = document.getElementById('notification-area');
     const ttsForm = document.getElementById('tts-form');
     const ttsFormHeader = document.getElementById('tts-form-header');
@@ -144,6 +165,14 @@ document.addEventListener('DOMContentLoaded', async function () {
         });
     }
 
+    // Logout functionality
+    if (logoutButton) {
+        logoutButton.addEventListener('click', () => {
+            localStorage.removeItem('authToken');
+            window.location.reload();
+        });
+    }
+
     // --- UI State Persistence ---
     async function saveCurrentUiState() {
         const stateToSave = {
@@ -159,9 +188,15 @@ document.addEventListener('DOMContentLoaded', async function () {
             theme: localStorage.getItem('uiTheme') || 'dark'
         };
         try {
+            const token = localStorage.getItem('authToken');
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+            
             const response = await fetch('/save_settings', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: headers,
                 body: JSON.stringify({ ui_state: stateToSave })
             });
             if (!response.ok) {
@@ -219,7 +254,13 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     async function fetchInitialData() {
         try {
-            const response = await fetch('/api/ui/initial-data');
+            const token = localStorage.getItem('authToken');
+            const headers = {};
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+            
+            const response = await fetch('/api/ui/initial-data', { headers });
             if (!response.ok) {
                 const errorText = await response.text();
                 throw new Error(`Failed to fetch initial UI data: ${response.status} ${response.statusText}. Server response: ${errorText}`);
@@ -556,9 +597,15 @@ document.addEventListener('DOMContentLoaded', async function () {
         const startTime = performance.now();
         const jsonData = getTTSFormData();
         try {
+            const token = localStorage.getItem('authToken');
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+            
             const response = await fetch('/tts', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: headers,
                 body: JSON.stringify(jsonData)
             });
             if (!response.ok) {
@@ -697,7 +744,8 @@ document.addEventListener('DOMContentLoaded', async function () {
             if (Object.keys(configDataToSave).length === 0) { showNotification("No editable configuration values to save.", "info"); return; }
             updateConfigStatus(saveConfigBtn, configStatus, 'Saving configuration...', 'info', 0, false);
             try {
-                const response = await fetch('/save_settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(configDataToSave) });
+                const headers = { 'Content-Type': 'application/json', ...getAuthHeaders() };
+                const response = await fetch('/save_settings', { method: 'POST', headers, body: JSON.stringify(configDataToSave) });
                 const result = await response.json();
                 if (!response.ok) throw new Error(result.detail || 'Failed to save configuration');
                 updateConfigStatus(saveConfigBtn, configStatus, result.message || 'Configuration saved.', 'success', 5000);
@@ -720,7 +768,8 @@ document.addEventListener('DOMContentLoaded', async function () {
             };
             updateConfigStatus(saveGenDefaultsBtn, genDefaultsStatus, 'Saving generation defaults...', 'info', 0, false);
             try {
-                const response = await fetch('/save_settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ generation_defaults: genParams }) });
+                const headers = { 'Content-Type': 'application/json', ...getAuthHeaders() };
+                const response = await fetch('/save_settings', { method: 'POST', headers, body: JSON.stringify({ generation_defaults: genParams }) });
                 const result = await response.json();
                 if (!response.ok) throw new Error(result.detail || 'Failed to save generation defaults');
                 updateConfigStatus(saveGenDefaultsBtn, genDefaultsStatus, result.message || 'Generation defaults saved.', 'success', 5000);
@@ -737,7 +786,8 @@ document.addEventListener('DOMContentLoaded', async function () {
             if (!confirm("Are you sure you want to reset ALL settings to their initial defaults? This will affect config.yaml and UI preferences. This action cannot be undone.")) return;
             updateConfigStatus(resetSettingsBtn, configStatus, 'Resetting settings...', 'info', 0, false);
             try {
-                const response = await fetch('/reset_settings', { method: 'POST' });
+                const headers = getAuthHeaders();
+                const response = await fetch('/reset_settings', { method: 'POST', headers });
                 if (!response.ok) {
                     const errorResult = await response.json().catch(() => ({ detail: 'Failed to reset settings on server.' }));
                     throw new Error(errorResult.detail);
@@ -758,7 +808,8 @@ document.addEventListener('DOMContentLoaded', async function () {
             if (!confirm("Are you sure you want to restart the server?")) return;
             updateConfigStatus(restartServerBtn, configStatus, 'Attempting server restart...', 'processing', 0, false);
             try {
-                const response = await fetch('/restart_server', { method: 'POST' });
+                const headers = getAuthHeaders();
+                const response = await fetch('/restart_server', { method: 'POST', headers });
                 const result = await response.json();
                 if (!response.ok) throw new Error(result.detail || 'Server responded with error on restart command');
                 showNotification("Server restart initiated. Please wait a moment for the server to come back online, then refresh the page.", "info", 10000);
@@ -782,7 +833,8 @@ document.addEventListener('DOMContentLoaded', async function () {
         const formData = new FormData();
         for (const file of files) formData.append('files', file);
         try {
-            const response = await fetch(endpoint, { method: 'POST', body: formData });
+            const headers = getAuthHeaders();
+            const response = await fetch(endpoint, { method: 'POST', headers, body: formData });
             const result = await response.json();
             if (uploadNotification) uploadNotification.remove();
             if (!response.ok) throw new Error(result.message || result.detail || `Upload failed with status ${response.status}`);
@@ -840,7 +892,8 @@ document.addEventListener('DOMContentLoaded', async function () {
             cloneRefreshButton.innerHTML = `<svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`;
             cloneRefreshButton.disabled = true;
             try {
-                const response = await fetch('/get_reference_files');
+                const headers = getAuthHeaders();
+                const response = await fetch('/get_reference_files', { headers });
                 if (!response.ok) throw new Error('Failed to fetch reference files list');
                 const files = await response.json();
                 initialReferenceFiles = files;
@@ -863,7 +916,8 @@ document.addEventListener('DOMContentLoaded', async function () {
             predefinedVoiceRefreshButton.innerHTML = `<svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`;
             predefinedVoiceRefreshButton.disabled = true;
             try {
-                const response = await fetch('/get_predefined_voices');
+                const headers = getAuthHeaders();
+                const response = await fetch('/get_predefined_voices', { headers });
                 if (!response.ok) throw new Error('Failed to fetch predefined voices list');
                 const voices = await response.json();
                 initialPredefinedVoices = voices;

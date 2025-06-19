@@ -13,6 +13,11 @@ git+https://github.com/resemble-ai/chatterbox.git
 fastapi
 uvicorn[standard]
 
+# --- Authentication Dependencies ---
+PyJWT
+bcrypt
+python-dotenv
+
 # --- Additional utilities not included in chatterbox ---
 python-multipart
 aiofiles

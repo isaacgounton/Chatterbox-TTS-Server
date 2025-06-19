@@ -18,6 +18,10 @@ from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any, Literal
 import webbrowser  # For automatic browser opening
 import threading  # For automatic browser opening
+import jwt
+import bcrypt
+from datetime import datetime, timedelta
+from dotenv import load_dotenv
 
 from fastapi import (
     FastAPI,
@@ -27,7 +31,9 @@ from fastapi import (
     UploadFile,
     Form,
     BackgroundTasks,
+    Depends,
 )
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -69,6 +75,29 @@ import utils  # Utility functions
 
 from pydantic import BaseModel, Field
 
+# Load environment variables
+load_dotenv()
+
+# Authentication configuration
+SECRET_KEY = os.getenv("SESSION_SECRET", "your-secret-key-change-this")
+AUTH_USERNAME = os.getenv("AUTH_USERNAME", "admin")
+AUTH_PASSWORD_HASH = os.getenv("AUTH_PASSWORD_HASH", "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBQ72SJWJzX4gS")  # default: "password"
+
+# API Key configuration (for API endpoints)
+API_KEY = os.getenv("API_KEY", "your_api_key")
+REQUIRE_API_KEY = os.getenv("REQUIRE_API_KEY", "false").lower() == "true"
+
+# Security
+security = HTTPBearer()
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class LoginResponse(BaseModel):
+    success: bool
+    token: Optional[str] = None
+    message: Optional[str] = None
 
 class OpenAISpeechRequest(BaseModel):
     model: str
@@ -78,6 +107,65 @@ class OpenAISpeechRequest(BaseModel):
     speed: float = 1.0
     seed: Optional[int] = None
 
+# Authentication functions
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against its hash."""
+    try:
+        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+    except Exception:
+        return False
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    """Create a JWT access token."""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(hours=24)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm="HS256")
+    return encoded_jwt
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Verify JWT token from Authorization header (for UI authentication)."""
+    try:
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=["HS256"])
+        username: str = payload.get("sub")
+        if username is None:
+            raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+        return username
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+
+def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Verify API key from Authorization header (for API endpoints)."""
+    if not REQUIRE_API_KEY:
+        return True  # API key not required
+    
+    try:
+        # Check if it's a Bearer token with API key
+        if credentials.credentials == API_KEY:
+            return True
+        else:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+def optional_api_key_check(request: Request):
+    """Optional API key check that allows requests without Authorization header."""
+    if not REQUIRE_API_KEY:
+        return True
+    
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        raise HTTPException(status_code=401, detail="API key required")
+    
+    if auth_header.startswith("Bearer "):
+        api_key = auth_header.split(" ")[1]
+        if api_key == API_KEY:
+            return True
+    
+    raise HTTPException(status_code=401, detail="Invalid API key")
 
 # --- Logging Configuration ---
 log_file_path_obj = get_log_file_path()
@@ -235,6 +323,21 @@ async def health_check():
         "model_loaded": engine.MODEL_LOADED
     }
 
+# Authentication endpoints
+@app.post("/api/auth/login", response_model=LoginResponse)
+async def login(request: LoginRequest):
+    """Authenticate user and return JWT token."""
+    if request.username == AUTH_USERNAME and verify_password(request.password, AUTH_PASSWORD_HASH):
+        access_token = create_access_token(data={"sub": request.username})
+        return LoginResponse(success=True, token=access_token)
+    else:
+        return LoginResponse(success=False, message="Invalid username or password")
+
+@app.get("/api/auth/verify")
+async def verify_auth(username: str = Depends(verify_token)):
+    """Verify JWT token."""
+    return {"valid": True, "username": username}
+
 @app.get("/voices", tags=["System"])
 async def get_voices():
     """Get available voices for compatibility with TTS gateway."""
@@ -278,8 +381,28 @@ async def get_voices():
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def get_web_ui(request: Request):
-    """Serves the main web interface (index.html)."""
+    """Serves the main web interface (index.html) with authentication check."""
     logger.info("Request received for main UI page ('/').")
+    
+    # Check for authentication
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        # Return login page HTML instead of the main interface
+        return HTMLResponse(content=get_login_html(), status_code=200)
+    
+    try:
+        # Verify the token
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
+            payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+            username = payload.get("sub")
+            if not username:
+                return HTMLResponse(content=get_login_html(), status_code=200)
+        else:
+            return HTMLResponse(content=get_login_html(), status_code=200)
+    except jwt.PyJWTError:
+        return HTMLResponse(content=get_login_html(), status_code=200)
+    
     try:
         return templates.TemplateResponse("index.html", {"request": request})
     except Exception as e_render:
@@ -290,10 +413,195 @@ async def get_web_ui(request: Request):
             status_code=500,
         )
 
+def get_login_html():
+    """Returns the login page HTML."""
+    return """
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatterbox TTS - Login</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        slate: { 50: '#f8fafc', 100: '#f1f5f9', 200: '#e2e8f0', 300: '#cbd5e1', 400: '#94a3b8', 500: '#64748b', 600: '#475569', 700: '#334155', 800: '#1e293b', 900: '#0f172a', 950: '#020617' },
+                        indigo: { 50: '#eef2ff', 100: '#e0e7ff', 200: '#c7d2fe', 300: '#a5b4fc', 400: '#818cf8', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 800: '#3730a3', 900: '#312e81' },
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-900 to-indigo-900 flex items-center justify-center p-4">
+    <div class="max-w-md w-full bg-slate-800 rounded-xl shadow-lg p-8 border border-slate-700">
+        <div class="text-center mb-8">
+            <div class="mx-auto w-16 h-16 bg-indigo-600 rounded-full flex items-center justify-center mb-4">
+                <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                </svg>
+            </div>
+            <h1 class="text-2xl font-bold text-slate-100 mb-2">
+                🗣️ Chatterbox TTS
+            </h1>
+            <p class="text-slate-400">
+                Please sign in to access the TTS system
+            </p>
+        </div>
+
+        <form id="login-form" class="space-y-6">
+            <div>
+                <label for="username" class="block text-sm font-medium text-slate-300 mb-2">
+                    Username
+                </label>
+                <div class="relative">
+                    <svg class="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+                    </svg>
+                    <input
+                        id="username"
+                        type="text"
+                        class="w-full pl-10 pr-4 py-3 border border-slate-600 bg-slate-700 text-slate-100 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent placeholder-slate-400"
+                        placeholder="Enter your username"
+                        required
+                    />
+                </div>
+            </div>
+
+            <div>
+                <label for="password" class="block text-sm font-medium text-slate-300 mb-2">
+                    Password
+                </label>
+                <div class="relative">
+                    <svg class="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                    </svg>
+                    <input
+                        id="password"
+                        type="password"
+                        class="w-full pl-10 pr-12 py-3 border border-slate-600 bg-slate-700 text-slate-100 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent placeholder-slate-400"
+                        placeholder="Enter your password"
+                        required
+                    />
+                    <button
+                        type="button"
+                        id="toggle-password"
+                        class="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 hover:text-slate-300"
+                    >
+                        <svg id="eye-closed" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"></path>
+                        </svg>
+                        <svg id="eye-open" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.543 7-1.275 4.057-5.065 7-9.543 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <div id="error-message" class="hidden bg-red-950 border border-red-700 text-red-200 px-4 py-3 rounded-lg">
+            </div>
+
+            <button
+                type="submit"
+                id="login-button"
+                class="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-600 text-white font-semibold py-3 px-6 rounded-lg transition duration-200"
+            >
+                Sign In
+            </button>
+        </form>
+    </div>
+
+    <script>
+        // Toggle password visibility
+        document.getElementById('toggle-password').addEventListener('click', function() {
+            const passwordInput = document.getElementById('password');
+            const eyeClosed = document.getElementById('eye-closed');
+            const eyeOpen = document.getElementById('eye-open');
+            
+            if (passwordInput.type === 'password') {
+                passwordInput.type = 'text';
+                eyeClosed.classList.add('hidden');
+                eyeOpen.classList.remove('hidden');
+            } else {
+                passwordInput.type = 'password';
+                eyeClosed.classList.remove('hidden');
+                eyeOpen.classList.add('hidden');
+            }
+        });
+
+        // Handle form submission
+        document.getElementById('login-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const loginButton = document.getElementById('login-button');
+            const errorMessage = document.getElementById('error-message');
+            
+            // Reset error state
+            errorMessage.classList.add('hidden');
+            loginButton.disabled = true;
+            loginButton.textContent = 'Signing in...';
+            
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ username, password }),
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.token) {
+                    // Store token and reload page
+                    localStorage.setItem('authToken', data.token);
+                    window.location.reload();
+                } else {
+                    errorMessage.textContent = data.message || 'Invalid credentials';
+                    errorMessage.classList.remove('hidden');
+                }
+            } catch (error) {
+                errorMessage.textContent = 'Connection error. Please try again.';
+                errorMessage.classList.remove('hidden');
+            } finally {
+                loginButton.disabled = false;
+                loginButton.textContent = 'Sign In';
+            }
+        });
+
+        // Check if user is already logged in
+        const token = localStorage.getItem('authToken');
+        if (token) {
+            // Add Authorization header to current page request and reload
+            fetch('/', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            }).then(response => {
+                if (response.ok) {
+                    window.location.reload();
+                }
+            }).catch(() => {
+                // Token might be invalid, remove it
+                localStorage.removeItem('authToken');
+            });
+        }
+    </script>
+</body>
+</html>
+    """
+
 
 # --- API Endpoint for Initial UI Data ---
 @app.get("/api/ui/initial-data", tags=["UI Helpers"])
-async def get_ui_initial_data():
+async def get_ui_initial_data(username: str = Depends(verify_token)):
     """
     Provides all necessary initial data for the UI to render,
     including configuration, file lists, and presets.
@@ -629,7 +937,7 @@ async def upload_predefined_voice_endpoint(files: List[UploadFile] = File(...)):
 
 # Gateway-compatible TTS endpoint
 @app.post("/tts", tags=["TTS Generation"])
-async def gateway_tts_endpoint(request: dict):
+async def gateway_tts_endpoint(request: dict, api_auth: bool = Depends(optional_api_key_check)):
     """Gateway-compatible TTS endpoint that accepts simple requests."""
     if not engine.MODEL_LOADED:
         raise HTTPException(
@@ -997,7 +1305,7 @@ async def custom_tts_endpoint(
 
 
 @app.post("/v1/audio/speech", tags=["OpenAI Compatible"])
-async def openai_speech_endpoint(request: OpenAISpeechRequest):
+async def openai_speech_endpoint(request: OpenAISpeechRequest, api_auth: bool = Depends(optional_api_key_check)):
     # Determine the audio prompt path based on the voice parameter
     predefined_voices_path = get_predefined_voices_path(ensure_absolute=True)
     reference_audio_path = get_reference_audio_path(ensure_absolute=True)
