@@ -102,6 +102,109 @@ document.addEventListener('DOMContentLoaded', async function () {
     const generationWarningAcknowledgeBtn = document.getElementById('generation-warning-acknowledge');
     const hideGenerationWarningCheckbox = document.getElementById('hide-generation-warning-checkbox');
 
+    // --- LOGIN/APP LOADING LOGIC PATCH ---
+    // Hide the main app UI if not authenticated
+    function showLoginForm() {
+        document.body.innerHTML = `
+        <div class="min-h-screen bg-gradient-to-br from-slate-900 to-indigo-900 flex items-center justify-center p-4">
+            <div class="max-w-md w-full bg-slate-800 rounded-xl shadow-lg p-8 border border-slate-700">
+                <div class="text-center mb-8">
+                    <div class="mx-auto w-16 h-16 bg-indigo-600 rounded-full flex items-center justify-center mb-4">
+                        <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                        </svg>
+                    </div>
+                    <h1 class="text-2xl font-bold text-slate-100 mb-2">
+                        🗣️ Chatterbox TTS
+                    </h1>
+                    <p class="text-slate-400">
+                        Please sign in to access the TTS system
+                    </p>
+                </div>
+                <form id="login-form" class="space-y-6">
+                    <div>
+                        <label for="username" class="block text-sm font-medium text-slate-300 mb-2">
+                            Username
+                        </label>
+                        <div class="relative">
+                            <input id="username" type="text" class="w-full pl-10 pr-4 py-3 border border-slate-600 bg-slate-700 text-slate-100 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent placeholder-slate-400" placeholder="Enter your username" required />
+                        </div>
+                    </div>
+                    <div>
+                        <label for="password" class="block text-sm font-medium text-slate-300 mb-2">
+                            Password
+                        </label>
+                        <div class="relative">
+                            <input id="password" type="password" class="w-full pl-10 pr-12 py-3 border border-slate-600 bg-slate-700 text-slate-100 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent placeholder-slate-400" placeholder="Enter your password" required />
+                        </div>
+                    </div>
+                    <div id="error-message" class="hidden bg-red-950 border border-red-700 text-red-200 px-4 py-3 rounded-lg"></div>
+                    <button type="submit" id="login-button" class="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-600 text-white font-semibold py-3 px-6 rounded-lg transition duration-200">
+                        Sign In
+                    </button>
+                </form>
+            </div>
+        </div>
+        `;
+        document.getElementById('login-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const loginButton = document.getElementById('login-button');
+            const errorMessage = document.getElementById('error-message');
+            errorMessage.classList.add('hidden');
+            loginButton.disabled = true;
+            loginButton.textContent = 'Signing in...';
+            try {
+                const response = await fetch('/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await response.json();
+                if (data.success && data.token) {
+                    localStorage.setItem('authToken', data.token);
+                    window.location.reload();
+                } else {
+                    errorMessage.textContent = data.message || 'Invalid credentials';
+                    errorMessage.classList.remove('hidden');
+                }
+            } catch (error) {
+                errorMessage.textContent = 'Connection error. Please try again.';
+                errorMessage.classList.remove('hidden');
+            } finally {
+                loginButton.disabled = false;
+                loginButton.textContent = 'Sign In';
+            }
+        });
+    }
+
+    // On load, check for token and try to fetch initial data
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+        showLoginForm();
+        return;
+    }
+    // Try to fetch initial data with token
+    try {
+        const headers = { 'Authorization': `Bearer ${token}` };
+        const response = await fetch('/api/ui/initial-data', { headers });
+        if (!response.ok) {
+            if (response.status === 401 || response.status === 403) {
+                localStorage.removeItem('authToken');
+                showLoginForm();
+                return;
+            }
+            const errorText = await response.text();
+            throw new Error(`Failed to fetch initial UI data: ${response.status} . Server response: ${errorText}`);
+        }
+        // If successful, continue loading the app as normal (rest of script.js)
+    } catch (error) {
+        localStorage.removeItem('authToken');
+        showLoginForm();
+        return;
+    }
+
     // --- Utility Functions ---
     function showNotification(message, type = 'info', duration = 5000) {
         if (!notificationArea) return null;
