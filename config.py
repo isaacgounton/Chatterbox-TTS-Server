@@ -22,6 +22,12 @@ def get_host():
 def get_port():
     return int(os.getenv('PORT', 9001))
 
+def get_auth_username():
+    return os.getenv('AUTH_USERNAME', config.get('server', {}).get('auth_username', 'user'))
+
+def get_auth_password():
+    return os.getenv('AUTH_PASSWORD', config.get('server', {}).get('auth_password', 'password'))
+
 def get_log_file_path(ensure_absolute: bool = False):
     path = Path('logs/server.log')
     return path.absolute() if ensure_absolute else path
