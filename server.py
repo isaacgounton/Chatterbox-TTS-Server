@@ -398,15 +398,32 @@ async def get_web_ui(request: Request):
     """Serves the main web interface (index.html) with authentication check."""
     logger.info("Request received for main UI page ('/').")
     
-    try:
-        return templates.TemplateResponse("index.html", {"request": request})
-    except Exception as e_render:
-        logger.error(f"Error rendering main UI page: {e_render}", exc_info=True)
-        return HTMLResponse(
-            "<html><body><h1>Internal Server Error</h1><p>Could not load the TTS interface. "
-            "Please check server logs for more details.</p></body></html>",
-            status_code=500,
-        )
+    # Check for authentication token in Authorization header
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        try:
+            # Verify the token
+            payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+            username = payload.get("sub")
+            if username:
+                # Token is valid, serve the main UI
+                try:
+                    return templates.TemplateResponse("index.html", {"request": request})
+                except Exception as e_render:
+                    logger.error(f"Error rendering main UI page: {e_render}", exc_info=True)
+                    return HTMLResponse(
+                        "<html><body><h1>Internal Server Error</h1><p>Could not load the TTS interface. "
+                        "Please check server logs for more details.</p></body></html>",
+                        status_code=500,
+                    )
+        except jwt.PyJWTError:
+            # Token is invalid, show login page
+            pass
+    
+    # No valid token, show login page
+    logger.info("No valid authentication token found, serving login page.")
+    return HTMLResponse(get_login_html())
 
 def get_login_html():
     """Returns the login page HTML."""
