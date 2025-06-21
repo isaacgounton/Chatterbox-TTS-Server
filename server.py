@@ -338,7 +338,7 @@ async def health_check():
     }
 
 # Authentication endpoints
-@app.post("/api/auth/login", response_model=LoginResponse)
+@app.post("/auth/login", response_model=LoginResponse)
 async def login(request: LoginRequest):
     """Authenticate user and return JWT token."""
     if authenticate_user(request.username, request.password):
