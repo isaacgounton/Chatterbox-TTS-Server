@@ -1,9 +1,11 @@
 // ui/script.js
-// Client-side JavaScript for the TTS Server web interface.
+// Client-side JavaScript for the Chatterbox TTS Server web interface.
 // Handles UI interactions, API communication, audio playback, and settings management.
 
 document.addEventListener('DOMContentLoaded', async function () {
     // --- Global Flags & State ---
+    let uiReady = false;
+    let listenersAttached = false;
     let isGenerating = false;
     let wavesurfer = null;
     let currentAudioBlobUrl = null;
@@ -19,7 +21,12 @@ document.addEventListener('DOMContentLoaded', async function () {
     let hideGenerationWarning = false;
     let currentVoiceMode = 'predefined';
 
+    const IS_LOCAL_FILE = window.location.protocol === 'file:';
+    // If you always access the server via localhost
+    const API_BASE_URL = IS_LOCAL_FILE ? 'http://localhost:8004' : '';
+
     const DEBOUNCE_DELAY_MS = 750;
+
 
     // --- DOM Element Selectors ---
     const appTitleLink = document.getElementById('app-title-link');
@@ -61,6 +68,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     const seedInput = document.getElementById('seed');
     const languageSelectContainer = document.getElementById('language-select-container');
     const languageSelect = document.getElementById('language');
+    const outputFormatSelect = document.getElementById('output-format');
     const saveGenDefaultsBtn = document.getElementById('save-gen-defaults-btn');
     const genDefaultsStatus = document.getElementById('gen-defaults-status');
     const serverConfigForm = document.getElementById('server-config-form');
@@ -81,6 +89,34 @@ document.addEventListener('DOMContentLoaded', async function () {
     const generationWarningAcknowledgeBtn = document.getElementById('generation-warning-acknowledge');
     const hideGenerationWarningCheckbox = document.getElementById('hide-generation-warning-checkbox');
 
+
+    // Handle voice mode selection visual feedback
+    const voiceModeOptions = document.querySelectorAll('.voice-mode-option');
+
+    voiceModeRadios.forEach(radio => {
+        radio.addEventListener('change', function () {
+            // Remove selected class from all options
+            voiceModeOptions.forEach(option => {
+                option.classList.remove('selected');
+            });
+
+            // Add selected class to the parent of the checked radio
+            const selectedOption = this.closest('.voice-mode-option');
+            if (selectedOption) {
+                selectedOption.classList.add('selected');
+            }
+        });
+    });
+
+    // Set initial state
+    const checkedRadio = document.querySelector('input[name="voice_mode"]:checked');
+    if (checkedRadio) {
+        const selectedOption = checkedRadio.closest('.voice-mode-option');
+        if (selectedOption) {
+            selectedOption.classList.add('selected');
+        }
+    }
+
     // --- Utility Functions ---
     function showNotification(message, type = 'info', duration = 5000) {
         if (!notificationArea) return null;
@@ -92,12 +128,17 @@ document.addEventListener('DOMContentLoaded', async function () {
         };
         const typeClassMap = { success: 'notification-success', error: 'notification-error', warning: 'notification-warning', info: 'notification-info' };
         const notificationDiv = document.createElement('div');
-        notificationDiv.className = typeClassMap[type] || 'notification-info';
+        notificationDiv.className = `notification-base ${typeClassMap[type] || 'notification-info'}`;
         notificationDiv.setAttribute('role', 'alert');
-        notificationDiv.innerHTML = `${icons[type] || icons['info']} <span class="block sm:inline">${message}</span>`;
+        // Create content wrapper
+        const contentWrapper = document.createElement('div');
+        contentWrapper.className = 'flex items-start flex-grow';
+        contentWrapper.innerHTML = `${icons[type] || icons['info']} <span class="block sm:inline">${message}</span>`;
+
+        // Create close button
         const closeButton = document.createElement('button');
         closeButton.type = 'button';
-        closeButton.className = 'ml-auto -mx-1.5 -my-1.5 bg-transparent rounded-lg p-1.5 inline-flex h-8 w-8 items-center justify-center text-current hover:bg-slate-200 dark:hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-400';
+        closeButton.className = 'ml-auto -mx-1.5 -my-1.5 bg-transparent rounded-lg p-1.5 inline-flex h-8 w-8 items-center justify-center text-current hover:bg-slate-200 dark:hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-400 flex-shrink-0';
         closeButton.innerHTML = '<span class="sr-only">Close</span><svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>';
         closeButton.onclick = () => {
             notificationDiv.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
@@ -105,6 +146,9 @@ document.addEventListener('DOMContentLoaded', async function () {
             notificationDiv.style.transform = 'translateY(-20px)';
             setTimeout(() => notificationDiv.remove(), 300);
         };
+
+        // Add both to notification
+        notificationDiv.appendChild(contentWrapper);
         notificationDiv.appendChild(closeButton);
         notificationArea.appendChild(notificationDiv);
         if (duration > 0) setTimeout(() => closeButton.click(), duration);
@@ -159,7 +203,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             theme: localStorage.getItem('uiTheme') || 'dark'
         };
         try {
-            const response = await fetch('/save_settings', {
+            const response = await fetch(`${API_BASE_URL}/save_settings`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ui_state: stateToSave })
@@ -175,6 +219,9 @@ document.addEventListener('DOMContentLoaded', async function () {
     }
 
     function debouncedSaveState() {
+        // Do not save anything until the entire UI has finished its initial setup.
+        // MODIFICATION: Add a check for listenersAttached.
+        if (!uiReady || !listenersAttached) { return; }
         clearTimeout(saveStateTimeout);
         saveStateTimeout = setTimeout(saveCurrentUiState, DEBOUNCE_DELAY_MS);
     }
@@ -197,7 +244,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     function initializeApplication() {
         const preferredTheme = localStorage.getItem('uiTheme') || currentUiState.theme || 'dark';
         applyTheme(preferredTheme);
-        const pageTitle = currentConfig?.ui?.title || "TTS Server";
+        const pageTitle = currentConfig?.ui?.title || "Chatterbox TTS Server";
         document.title = pageTitle;
         if (appTitleLink) appTitleLink.textContent = pageTitle;
         if (ttsFormHeader) ttsFormHeader.textContent = `Generate Speech`;
@@ -210,7 +257,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             languageSelectContainer.classList.add('hidden');
         }
         updateSpeedFactorWarning(); // Initial check for speed factor warning
-        attachStateSavingListeners();
+        // attachStateSavingListeners();
         const initialGenResult = currentConfig.initial_gen_result;
         if (initialGenResult && initialGenResult.outputUrl) {
             initializeWaveSurfer(initialGenResult.outputUrl, initialGenResult);
@@ -219,7 +266,7 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     async function fetchInitialData() {
         try {
-            const response = await fetch('/api/ui/initial-data');
+            const response = await fetch(`${API_BASE_URL}/api/ui/initial-data`);
             if (!response.ok) {
                 const errorText = await response.text();
                 throw new Error(`Failed to fetch initial UI data: ${response.status} ${response.statusText}. Server response: ${errorText}`);
@@ -233,15 +280,27 @@ document.addEventListener('DOMContentLoaded', async function () {
             hideChunkWarning = currentUiState.hide_chunk_warning || false;
             hideGenerationWarning = currentUiState.hide_generation_warning || false;
             currentVoiceMode = currentUiState.last_voice_mode || 'predefined';
+
+            // This now ONLY sets values. It does NOT attach state-saving listeners.
             initializeApplication();
+
         } catch (error) {
             console.error("Error fetching initial data:", error);
             showNotification(`Could not load essential application data: ${error.message}. Please try refreshing.`, 'error', 0);
             if (Object.keys(currentConfig).length === 0) {
-                currentConfig = { ui: { title: "TTS Server (Error Mode)" }, generation_defaults: {}, ui_state: {} };
+                currentConfig = { ui: { title: "Chatterbox TTS Server (Error Mode)" }, generation_defaults: {}, ui_state: {} };
                 currentUiState = currentConfig.ui_state;
             }
-            initializeApplication();
+            initializeApplication(); // Attempt to init in a degraded state
+        } finally {
+            // --- PHASE 2: Attach listeners and enable UI readiness ---
+            // This pushes the listener attachment to the end of the event queue,
+            // ensuring all initialization events have fired harmlessly before we start listening.
+            setTimeout(() => {
+                attachStateSavingListeners();
+                listenersAttached = true;
+                uiReady = true;
+            }, 50); // A 50ms delay is more robust than 0ms for complex UIs.
         }
     }
 
@@ -273,15 +332,20 @@ document.addEventListener('DOMContentLoaded', async function () {
         if (speedFactorSlider) speedFactorSlider.value = genDefaults.speed_factor !== undefined ? genDefaults.speed_factor : 1.0;
         if (speedFactorValueDisplay) speedFactorValueDisplay.textContent = speedFactorSlider.value;
         if (languageSelect) languageSelect.value = genDefaults.language || 'en';
+        if (outputFormatSelect) outputFormatSelect.value = currentConfig?.audio_output?.format || 'mp3';
         if (hideChunkWarningCheckbox) hideChunkWarningCheckbox.checked = hideChunkWarning;
         if (hideGenerationWarningCheckbox) hideGenerationWarningCheckbox.checked = hideGenerationWarning;
         if (textArea && !textArea.value && appPresets && appPresets.length > 0) {
             const defaultPreset = appPresets.find(p => p.name === "Standard Narration") || appPresets[0];
-            if (defaultPreset) applyPreset(defaultPreset, false);
+            if (defaultPreset) applyPreset(defaultPreset, false, false);
         }
     }
 
     function attachStateSavingListeners() {
+        voiceModeRadios.forEach(radio => {
+            radio.addEventListener('change', debouncedSaveState);
+        });
+
         if (textArea) textArea.addEventListener('input', () => { if (charCount) charCount.textContent = textArea.value.length; debouncedSaveState(); });
         if (predefinedVoiceSelect) predefinedVoiceSelect.addEventListener('change', debouncedSaveState);
         if (cloneReferenceSelect) cloneReferenceSelect.addEventListener('change', debouncedSaveState);
@@ -304,6 +368,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             }
         });
         if (languageSelect) languageSelect.addEventListener('change', debouncedSaveState);
+        if (outputFormatSelect) outputFormatSelect.addEventListener('change', debouncedSaveState);
     }
 
     // --- Dynamic UI Population ---
@@ -392,17 +457,24 @@ document.addEventListener('DOMContentLoaded', async function () {
             const voiceExists = Array.from(predefinedVoiceSelect.options).some(opt => opt.value === genParams.voice_id);
             if (voiceExists) {
                 predefinedVoiceSelect.value = genParams.voice_id;
-                document.querySelector('input[name="voice_mode"][value="predefined"]').click();
+                // MODIFICATION: Set checked property directly and call the UI update function.
+                document.querySelector('input[name="voice_mode"][value="predefined"]').checked = true;
+                toggleVoiceOptionsDisplay();
             }
         } else if (genParams.reference_audio_filename && cloneReferenceSelect) {
             const refExists = Array.from(cloneReferenceSelect.options).some(opt => opt.value === genParams.reference_audio_filename);
             if (refExists) {
                 cloneReferenceSelect.value = genParams.reference_audio_filename;
-                document.querySelector('input[name="voice_mode"][value="clone"]').click();
+                // MODIFICATION: Set checked property directly and call the UI update function.
+                document.querySelector('input[name="voice_mode"][value="clone"]').checked = true;
+                toggleVoiceOptionsDisplay();
             }
         }
         if (showNotif) showNotification(`Preset "${presetData.name}" loaded.`, 'info', 3000);
-        debouncedSaveState();
+        // Only save the state if this was a direct user click, not an init call.
+        if (isUserInteraction) {
+            debouncedSaveState();
+        }
     }
 
     // --- Voice Mode and Options Visibility ---
@@ -413,7 +485,6 @@ document.addEventListener('DOMContentLoaded', async function () {
         if (cloneOptionsDiv) cloneOptionsDiv.classList.toggle('hidden', selectedMode !== 'clone');
         if (predefinedVoiceSelect) predefinedVoiceSelect.required = (selectedMode === 'predefined');
         if (cloneReferenceSelect) cloneReferenceSelect.required = (selectedMode === 'clone');
-        debouncedSaveState();
     }
     voiceModeRadios.forEach(radio => radio.addEventListener('change', toggleVoiceOptionsDisplay));
 
@@ -445,11 +516,15 @@ document.addEventListener('DOMContentLoaded', async function () {
                     <div class="mb-5"><div id="waveform" class="waveform-container"></div></div>
                     <div class="audio-player-controls">
                         <div class="audio-player-buttons">
-                            <button id="play-btn" class="btn-primary" disabled>
-                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5 mr-1.5"><path fill-rule="evenodd" d="M2 10a8 8 0 1 1 16 0 8 8 0 0 1-16 0Zm6.39-2.908a.75.75 0 0 1 .766.027l3.5 2.25a.75.75 0 0 1 0 1.262l-3.5 2.25A.75.75 0 0 1 8 12.25v-4.5a.75.75 0 0 1 .39-.658Z" clip-rule="evenodd" /></svg> Play
+                            <button id="play-btn" class="btn-primary flex items-center" disabled>
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5 mr-1.5"><path fill-rule="evenodd" d="M2 10a8 8 0 1 1 16 0 8 8 0 0 1-16 0Zm6.39-2.908a.75.75 0 0 1 .766.027l3.5 2.25a.75.75 0 0 1 0 1.262l-3.5 2.25A.75.75 0 0 1 8 12.25v-4.5a.75.75 0 0 1 .39-.658Z" clip-rule="evenodd" /></svg>
+                                <span>Play</span>
                             </button>
-                            <a id="download-link" href="#" download="tts_output.wav" class="btn-secondary opacity-50 pointer-events-none">
-                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5 mr-1.5"><path d="M10.75 2.75a.75.75 0 0 0-1.5 0v8.614L6.295 8.235a.75.75 0 1 0-1.09 1.03l4.25 4.5a.75.75 0 0 0 1.09 0l4.25 4.5a.75.75 0 0 0-1.09-1.03l-2.955 3.129V2.75Z" /><path d="M3.5 12.75a.75.75 0 0 0-1.5 0v2.5A2.75 2.75 0 0 0 4.75 18h10.5A2.75 2.75 0 0 0 18 15.25v-2.5a.75.75 0 0 0-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5Z" /></svg> Download
+                            <a id="download-link" href="#" download="tts_output.wav" class="btn-secondary flex items-center opacity-50 pointer-events-none">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5 mr-1.5">
+                                  <path fill-rule="evenodd" d="M10 3a.75.75 0 01.75.75v6.638l1.96-2.158a.75.75 0 111.08 1.04l-3.25 3.5a.75.75 0 01-1.08 0l-3.25-3.5a.75.75 0 111.08-1.04l1.96 2.158V3.75A.75.75 0 0110 3zM3.75 13a.75.75 0 01.75.75v.008c0 .69.56 1.25 1.25 1.25h8.5c.69 0 1.25-.56 1.25-1.25V13.75a.75.75 0 011.5 0v.008c0 1.518-1.232 2.75-2.75 2.75h-8.5C4.232 16.5 3 15.268 3 13.75v-.008A.75.75 0 013.75 13z" clip-rule="evenodd" />
+                                </svg>
+                                <span>Download</span>
                             </a>
                         </div>
                         <div class="audio-player-info text-xs sm:text-sm">
@@ -464,7 +539,7 @@ document.addEventListener('DOMContentLoaded', async function () {
 
         // Re-select elements after recreating them
         const waveformDiv = audioPlayerContainer.querySelector('#waveform');
-        const playBtn = audioPlayerContainer.querySelector('#play-btn'); // Crucial: re-select after innerHTML change
+        const playBtn = audioPlayerContainer.querySelector('#play-btn');
         const downloadLink = audioPlayerContainer.querySelector('#download-link');
         const playerModeSpan = audioPlayerContainer.querySelector('#player-voice-mode');
         const playerFileSpan = audioPlayerContainer.querySelector('#player-voice-file-details');
@@ -475,7 +550,10 @@ document.addEventListener('DOMContentLoaded', async function () {
         if (downloadLink) {
             downloadLink.href = audioUrl;
             downloadLink.download = audioFilename;
-            downloadLink.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5 mr-1.5"><path d="M10.75 2.75a.75.75 0 0 0-1.5 0v8.614L6.295 8.235a.75.75 0 1 0-1.09 1.03l4.25 4.5a.75.75 0 0 0 1.09 0l4.25 4.5a.75.75 0 0 0-1.09-1.03l-2.955 3.129V2.75Z" /><path d="M3.5 12.75a.75.75 0 0 0-1.5 0v2.5A2.75 2.75 0 0 0 4.75 18h10.5A2.75 2.75 0 0 0 18 15.25v-2.5a.75.75 0 0 0-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5Z" /></svg> Download ${audioFilename.split('.').pop().toUpperCase()}`;
+            const downloadTextSpan = downloadLink.querySelector('span'); // Target the span for text update
+            if (downloadTextSpan) {
+                downloadTextSpan.textContent = `Download ${audioFilename.split('.').pop().toUpperCase()}`;
+            }
         }
         if (playerModeSpan) playerModeSpan.textContent = resultDetails.submittedVoiceMode || currentVoiceMode || '--';
         if (playerFileSpan) {
@@ -489,8 +567,8 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
         if (playerGenTimeSpan) playerGenTimeSpan.textContent = resultDetails.genTime ? `${resultDetails.genTime}s` : '--s';
 
-        const playIconSVG = playBtn.innerHTML; // Capture after it's created
-        const pauseIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5 mr-1.5"><path fill-rule="evenodd" d="M2 10a8 8 0 1 1 16 0 8 8 0 0 1-16 0Zm5-2.25A.75.75 0 0 1 7.75 7h4.5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-.75.75h-4.5a.75.75 0 0 1-.75-.75v-4.5Z" clip-rule="evenodd" /></svg> Pause`;
+        const playIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5 mr-1.5"><path fill-rule="evenodd" d="M2 10a8 8 0 1 1 16 0 8 8 0 0 1-16 0Zm6.39-2.908a.75.75 0 0 1 .766.027l3.5 2.25a.75.75 0 0 1 0 1.262l-3.5 2.25A.75.75 0 0 1 8 12.25v-4.5a.75.75 0 0 1 .39-.658Z" clip-rule="evenodd" /></svg><span>Play</span>`;
+        const pauseIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5 mr-1.5"><path fill-rule="evenodd" d="M2 10a8 8 0 1 1 16 0 8 8 0 0 1-16 0Zm5-2.25A.75.75 0 0 1 7.75 7h4.5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-.75.75h-4.5a.75.75 0 0 1-.75-.75v-4.5Z" clip-rule="evenodd" /></svg><span>Pause</span>`;
         const isDark = document.documentElement.classList.contains('dark');
 
         wavesurfer = WaveSurfer.create({
@@ -515,7 +593,6 @@ document.addEventListener('DOMContentLoaded', async function () {
             if (playBtn) playBtn.disabled = true;
         });
 
-        // This is crucial: ensure playBtn refers to the newly created button in the DOM
         if (playBtn) {
             playBtn.onclick = () => {
                 if (wavesurfer) {
@@ -525,7 +602,6 @@ document.addEventListener('DOMContentLoaded', async function () {
         }
         setTimeout(() => audioPlayerContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 150);
     }
-
 
     // --- TTS Generation Logic ---
     function getTTSFormData() {
@@ -540,7 +616,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             voice_mode: currentVoiceMode,
             split_text: splitTextToggle.checked,
             chunk_size: parseInt(chunkSizeSlider.value, 10),
-            output_format: currentConfig?.audio_output?.format || 'wav'
+            output_format: outputFormatSelect.value || 'mp3'
         };
         if (currentVoiceMode === 'predefined' && predefinedVoiceSelect.value !== 'none') {
             jsonData.predefined_voice_id = predefinedVoiceSelect.value;
@@ -556,7 +632,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         const startTime = performance.now();
         const jsonData = getTTSFormData();
         try {
-            const response = await fetch('/tts', {
+            const response = await fetch(`${API_BASE_URL}/tts`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(jsonData)
@@ -596,28 +672,83 @@ document.addEventListener('DOMContentLoaded', async function () {
         submitTTSRequest();
     }
 
-    if (ttsForm) {
-        ttsForm.addEventListener('submit', function (event) {
+    // --- Attach main generation event to the button's CLICK, not the form's SUBMIT ---
+    // This is a more robust method that prevents accidental submissions during page load.
+    if (generateBtn) {
+        generateBtn.addEventListener('click', function (event) {
+
+            console.log('Generate button clicked!');
+            console.log('Current voice mode:', currentVoiceMode);
+            console.log('Is generating:', isGenerating);
+            console.log('Text content:', textArea ? textArea.value.trim() : 'NO TEXTAREA');
+
+            // We still prevent default in case the button has any default browser actions.
             event.preventDefault();
-            if (isGenerating) { showNotification("Generation is already in progress.", "warning"); return; }
+
+            if (isGenerating) {
+                showNotification("Generation is already in progress.", "warning");
+                return;
+            }
             const textContent = textArea.value.trim();
-            if (!textContent) { showNotification("Please enter some text to generate speech.", 'error'); return; }
+            if (!textContent) {
+                showNotification("Please enter some text to generate speech.", 'error');
+                return;
+            }
             if (currentVoiceMode === 'predefined' && (!predefinedVoiceSelect || predefinedVoiceSelect.value === 'none')) {
-                showNotification("Please select a predefined voice.", 'error'); return;
+                showNotification("Please select a predefined voice.", 'error');
+                return;
             }
             if (currentVoiceMode === 'clone' && (!cloneReferenceSelect || cloneReferenceSelect.value === 'none')) {
-                showNotification("Please select a reference audio file for Voice Cloning.", 'error'); return;
+                showNotification("Please select a reference audio file for Voice Cloning.", 'error');
+                return;
             }
-            if (!hideGenerationWarning) { showGenerationWarningModal(); return; }
+
+            // Check for the generation quality warning.
+            if (!hideGenerationWarning) {
+                showGenerationWarningModal();
+                return; // Stop here and let the modal handler take over.
+            }
+
+            // If the warning is hidden, proceed to the final checks.
             proceedWithSubmissionChecks();
         });
+    } else {
+        console.log('Generate button not found!');
     }
 
     // --- Modal Handling ---
-    function showChunkWarningModal() { if (chunkWarningModal) { chunkWarningModal.classList.remove('hidden', 'opacity-0'); chunkWarningModal.dataset.state = 'open'; } }
-    function hideChunkWarningModal() { if (chunkWarningModal) { chunkWarningModal.classList.add('opacity-0'); setTimeout(() => { chunkWarningModal.classList.add('hidden'); chunkWarningModal.dataset.state = 'closed'; }, 300); } }
-    function showGenerationWarningModal() { if (generationWarningModal) { generationWarningModal.classList.remove('hidden', 'opacity-0'); generationWarningModal.dataset.state = 'open'; } }
-    function hideGenerationWarningModal() { if (generationWarningModal) { generationWarningModal.classList.add('opacity-0'); setTimeout(() => { generationWarningModal.classList.add('hidden'); generationWarningModal.dataset.state = 'closed'; }, 300); } }
+    function showChunkWarningModal() {
+        if (chunkWarningModal) {
+            chunkWarningModal.style.display = 'flex';
+            chunkWarningModal.classList.remove('hidden', 'opacity-0');
+            chunkWarningModal.dataset.state = 'open';
+        }
+    }
+    function hideChunkWarningModal() {
+        if (chunkWarningModal) {
+            chunkWarningModal.classList.add('opacity-0');
+            setTimeout(() => {
+                chunkWarningModal.style.display = 'none';
+                chunkWarningModal.dataset.state = 'closed';
+            }, 300);
+        }
+    }
+    function showGenerationWarningModal() {
+        if (generationWarningModal) {
+            generationWarningModal.style.display = 'flex';
+            generationWarningModal.classList.remove('hidden', 'opacity-0');
+            generationWarningModal.dataset.state = 'open';
+        }
+    }
+    function hideGenerationWarningModal() {
+        if (generationWarningModal) {
+            generationWarningModal.classList.add('opacity-0');
+            setTimeout(() => {
+                generationWarningModal.style.display = 'none';
+                generationWarningModal.dataset.state = 'closed';
+            }, 300);
+        }
+    }
     if (chunkWarningOkBtn) chunkWarningOkBtn.addEventListener('click', () => {
         if (hideChunkWarningCheckbox && hideChunkWarningCheckbox.checked) hideChunkWarning = true;
         hideChunkWarningModal(); debouncedSaveState(); submitTTSRequest();
@@ -634,6 +765,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         if (loadingOverlay && generateBtn && loadingCancelBtn) {
             loadingMessage.textContent = 'Generating audio...';
             loadingStatusText.textContent = 'Please wait. This may take some time.';
+            loadingOverlay.style.display = 'flex';
             loadingOverlay.classList.remove('hidden', 'opacity-0'); loadingOverlay.dataset.state = 'open';
             generateBtn.disabled = true; loadingCancelBtn.disabled = false;
         }
@@ -641,7 +773,10 @@ document.addEventListener('DOMContentLoaded', async function () {
     function hideLoadingOverlay() {
         if (loadingOverlay && generateBtn) {
             loadingOverlay.classList.add('opacity-0');
-            setTimeout(() => { loadingOverlay.classList.add('hidden'); loadingOverlay.dataset.state = 'closed'; }, 300);
+            setTimeout(() => {
+                loadingOverlay.style.display = 'none';
+                loadingOverlay.dataset.state = 'closed';
+            }, 300);
             generateBtn.disabled = false;
         }
     }
@@ -697,7 +832,11 @@ document.addEventListener('DOMContentLoaded', async function () {
             if (Object.keys(configDataToSave).length === 0) { showNotification("No editable configuration values to save.", "info"); return; }
             updateConfigStatus(saveConfigBtn, configStatus, 'Saving configuration...', 'info', 0, false);
             try {
-                const response = await fetch('/save_settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(configDataToSave) });
+                const response = await fetch(`${API_BASE_URL}/save_settings`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(configDataToSave)
+                });
                 const result = await response.json();
                 if (!response.ok) throw new Error(result.detail || 'Failed to save configuration');
                 updateConfigStatus(saveConfigBtn, configStatus, result.message || 'Configuration saved.', 'success', 5000);
@@ -720,7 +859,11 @@ document.addEventListener('DOMContentLoaded', async function () {
             };
             updateConfigStatus(saveGenDefaultsBtn, genDefaultsStatus, 'Saving generation defaults...', 'info', 0, false);
             try {
-                const response = await fetch('/save_settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ generation_defaults: genParams }) });
+                const response = await fetch(`${API_BASE_URL}/save_settings`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ generation_defaults: genParams })
+                });
                 const result = await response.json();
                 if (!response.ok) throw new Error(result.detail || 'Failed to save generation defaults');
                 updateConfigStatus(saveGenDefaultsBtn, genDefaultsStatus, result.message || 'Generation defaults saved.', 'success', 5000);
@@ -737,7 +880,9 @@ document.addEventListener('DOMContentLoaded', async function () {
             if (!confirm("Are you sure you want to reset ALL settings to their initial defaults? This will affect config.yaml and UI preferences. This action cannot be undone.")) return;
             updateConfigStatus(resetSettingsBtn, configStatus, 'Resetting settings...', 'info', 0, false);
             try {
-                const response = await fetch('/reset_settings', { method: 'POST' });
+                const response = await fetch(`${API_BASE_URL}/reset_settings`, {
+                    method: 'POST'
+                });
                 if (!response.ok) {
                     const errorResult = await response.json().catch(() => ({ detail: 'Failed to reset settings on server.' }));
                     throw new Error(errorResult.detail);
@@ -758,7 +903,9 @@ document.addEventListener('DOMContentLoaded', async function () {
             if (!confirm("Are you sure you want to restart the server?")) return;
             updateConfigStatus(restartServerBtn, configStatus, 'Attempting server restart...', 'processing', 0, false);
             try {
-                const response = await fetch('/restart_server', { method: 'POST' });
+                const response = await fetch(`${API_BASE_URL}/restart_server`, {
+                    method: 'POST'
+                });
                 const result = await response.json();
                 if (!response.ok) throw new Error(result.detail || 'Server responded with error on restart command');
                 showNotification("Server restart initiated. Please wait a moment for the server to come back online, then refresh the page.", "info", 10000);
@@ -782,7 +929,10 @@ document.addEventListener('DOMContentLoaded', async function () {
         const formData = new FormData();
         for (const file of files) formData.append('files', file);
         try {
-            const response = await fetch(endpoint, { method: 'POST', body: formData });
+            const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+                method: 'POST',
+                body: formData
+            });
             const result = await response.json();
             if (uploadNotification) uploadNotification.remove();
             if (!response.ok) throw new Error(result.message || result.detail || `Upload failed with status ${response.status}`);
@@ -840,7 +990,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             cloneRefreshButton.innerHTML = `<svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`;
             cloneRefreshButton.disabled = true;
             try {
-                const response = await fetch('/get_reference_files');
+                const response = await fetch(`${API_BASE_URL}/get_reference_files`);
                 if (!response.ok) throw new Error('Failed to fetch reference files list');
                 const files = await response.json();
                 initialReferenceFiles = files;
@@ -863,7 +1013,7 @@ document.addEventListener('DOMContentLoaded', async function () {
             predefinedVoiceRefreshButton.innerHTML = `<svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`;
             predefinedVoiceRefreshButton.disabled = true;
             try {
-                const response = await fetch('/get_predefined_voices');
+                const response = await fetch(`${API_BASE_URL}/get_predefined_voices`);
                 if (!response.ok) throw new Error('Failed to fetch predefined voices list');
                 const voices = await response.json();
                 initialPredefinedVoices = voices;

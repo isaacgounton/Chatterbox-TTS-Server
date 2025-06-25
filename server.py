@@ -188,7 +188,7 @@ app = FastAPI(
 # --- CORS Middleware ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*", "null"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
@@ -202,6 +202,33 @@ else:
     logger.warning(
         f"UI static assets directory not found at '{ui_static_path}'. UI may not load correctly."
     )
+
+# This will serve files from 'ui_static_path/vendor' when requests come to '/vendor/*'
+if (ui_static_path / "vendor").is_dir():
+    app.mount(
+        "/vendor", StaticFiles(directory=ui_static_path / "vendor"), name="vendor_files"
+    )
+else:
+    logger.warning(
+        f"Vendor directory not found at '{ui_static_path}' /vendor. Wavesurfer might not load."
+    )
+
+
+@app.get("/styles.css", include_in_schema=False)
+async def get_main_styles():
+    styles_file = ui_static_path / "styles.css"
+    if styles_file.is_file():
+        return FileResponse(styles_file)
+    raise HTTPException(status_code=404, detail="styles.css not found")
+
+
+@app.get("/script.js", include_in_schema=False)
+async def get_main_script():
+    script_file = ui_static_path / "script.js"
+    if script_file.is_file():
+        return FileResponse(script_file)
+    raise HTTPException(status_code=404, detail="script.js not found")
+
 
 outputs_static_path = get_output_path(ensure_absolute=True)
 try:
